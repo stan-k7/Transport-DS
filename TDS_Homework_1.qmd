@@ -1,3 +1,17 @@
 Transport DS Homework 1
 
 Chapter 13: Geo-computation with R
+
+Introduction
+
+Models are designed to tackle a particular problem, this chapter focuses on increasing cycling in the city of Bristol. These transport problems are closely linked to other sectors, for example increased cycling brings about an increased demand for shops that sell bikes.
+
+Bristol has a relatively active population, but still has problems such as congestion and air quality which could be improved upon by increased cycling. This chapter aims to show how geocomputation can be used provide the evidence that transport planners & stakeholders require to implement new, more sustainable transport systems.
+
+13.3 Transport Zones
+
+Defining a study area comes with problems; the study area defined by OpenStreetMap (OSM) might not be the official boundary used by authorities, or the official boundary may be inappropriate for transport research.
+
+Travel to Work Areas (TTWAs) address these issues. In this chapter these are defined by zones in which 75% of the people within travel to work - in Bristol's case this is much larger than the city bounds using OSM.
+
+The origin and destination zones used here are the same, regions of intermediate geographical resolution with around 8,000 households in each - meaning the zones are smaller in more densely populated regions.
