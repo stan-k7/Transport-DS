@@ -1,6 +1,30 @@
-Transport DS Homework 1
+---
+
+title: Transport DS Homework 1
+
+---
 
 Chapter 13: Geo-computation with R
+
+```{r}
+library(sf)
+library(dplyr)
+library(spDataLarge)
+library(stplanr)      # for processing geographic transport data
+library(tmap)         # map-making (see Chapter 9)
+library(ggplot2)      # data visualization package
+library(sfnetworks)
+library(tidyverse)
+library(osmextract)
+library(sf)
+library(dplyr)
+library(spDataLarge)
+library(stplanr)      # for processing geographic transport data
+library(tmap)         # map-making (see Chapter 9)
+library(ggplot2)      # data visualization package
+library(sfnetworks) 
+library(nabor)
+```
 
 Introduction
 
@@ -12,6 +36,216 @@ Bristol has a relatively active population, but still has problems such as conge
 
 Defining a study area comes with problems; the study area defined by OpenStreetMap (OSM) might not be the official boundary used by authorities, or the official boundary may be inappropriate for transport research.
 
+The following code defines a study area for this project using OSM:
+
+```{r}
+osmdata::getbb("Bristol", format_out = "sf_polygon", limit = 1)
+```
+
 Travel to Work Areas (TTWAs) address these issues. In this chapter these are defined by zones in which 75% of the people within travel to work - in Bristol's case this is much larger than the city bounds using OSM.
 
 The origin and destination zones used here are the same, regions of intermediate geographical resolution with around 8,000 households in each - meaning the zones are smaller in more densely populated regions.
+
+The zones for Bristol are stored in bristol_zones in the spDataLarge package, with the following attributes:
+
+```{r}
+bristol_zones
+names(bristol_zones) 
+```
+
+We can now add travel data to this zone data: bristol_od is an OD dataset on travel to work between zones from the UK’s 2011 Census. It shows information on travel between the origin (column 'o') and the destination (column 'd'). Note however that bristol_od has more rows than bristol_zones since it is showcasing travel between zones, not just the zones themselves.
+
+```{r}
+nrow(bristol_od) 
+nrow(bristol_zones)
+
+```
+
+We will need format the larger data frame into a smaller one to join the two together, to do this we will group the trips by their origin zone.
+
+```{r}
+zones_attr = bristol_od |> 
+  group_by(o) |> 
+  summarize(across(where(is.numeric), sum)) |> 
+  dplyr::rename(geo_code = o)
+```
+
+We can now join the two together:
+
+```{r}
+zones_joined = left_join(bristol_zones, zones_attr, by = "geo_code")
+sum(zones_joined$all)
+names(zones_joined)
+
+```
+
+Note: the all column is the number of trips originating in the zone.
+
+We can also get information about the trips to destinations rather than from origins in the same way, and add the data to our existing data frame.
+
+```{r}
+zones_destinations = bristol_od |> 
+  group_by(d) |> 
+  summarize(across(where(is.numeric), sum)) |> 
+  select(geo_code = d, all_dest = all)
+zones_od = inner_join(zones_joined, zones_destinations, by = "geo_code")
+```
+
+Where all_dest is the total number of trips to that zone. We can visualise the amount of trips to and from different zones with the following code:
+
+```{r}
+qtm(zones_od, c("all", "all_dest")) +
+  tm_layout(panel.labels = c("Origin", "Destination"))
+```
+
+13.4. Desire Lines
+
+Desire lines are lines between origins and destinations representing where people desire to go. They are the quickest route between two places (i.e as the crow flies). In this section the desire lines will start and end in the geographic centroids of the origin and destination zones.
+
+```{r}
+od_top5 = bristol_od |> 
+  slice_max(all, n = 5)
+```
+
+Since bristol_od already has travel data we can order the origin-destination pairs by the amount of people travelling between them, and select the top 5.
+
+Note: same destination (Bristol city center) for all the pairs, and walking as the most popular mode of transport for all pairs.
+
+```{r}
+bristol_od$Active = (bristol_od$bicycle + bristol_od$foot) /
+  bristol_od$all * 100
+```
+
+The code above adds a column showing the proportion of the trips in each pair made by walking or cycling (active modes of transport). To show the desire lines that need improvement the most.
+
+```{r}
+od_intra = filter(bristol_od, o == d)
+od_inter = filter(bristol_od, o != d)
+```
+
+This code has split bristol_od into intrazonal (within the same zone) and interzonal (between different zones) OD pairs.
+
+Now we can create desire lines using interzonal pairs and plot them on a map with the **stplanr** function [`od2line()`](https://docs.ropensci.org/stplanr/reference/od2line.html)
+
+```{r}
+desire_lines = od2line(od_inter, zones_od)
+qtm(desire_lines, lines.lwd = "all")
+```
+
+Note the smaller sub-centers outside the actual city center.
+
+13.5. Nodes
+
+There are two main types on transport nodes: Nodes not directly on the network such as zone centroids, houses and workplaces, or nodes that are special kinds of vertex such as intersections, or points for entering / exiting the network such as train stations.
+
+Public transport stops are particularly important nodes and can help to make longer journeys more manageable for walkers and cyclists. These journeys can be split into: origin leg - house to public transport, public transport leg and destination leg - public transport to destination.
+
+The first stage is to identify the desire lines with most public transport travel, which in our case is easy because our previously created dataset `desire_lines` already contains a variable describing the number of trips by train.
+
+```{r}
+desire_rail = top_n(desire_lines, n = 3, wt = train)
+```
+
+We want to split these desire lines into 3 parts representing the 3 legs, to do this we can use [`line_via()`](https://docs.ropensci.org/stplanr/reference/line_via.html), a **stplanr** function.
+
+```{r}
+ncol(desire_rail)
+desire_rail = line_via(desire_rail, bristol_stations)
+ncol(desire_rail)
+
+```
+
+Note: here we have added 3 columns, for the 3 legs.
+
+This can help us to evidence the far distances on origin/destination legs which would be suitable for investments to increase cycling.
+
+```{r}
+zone_cents = st_centroid(zones_od)
+zone_cents_rail = zone_cents[desire_rail, ]
+bb = tmaptools::bb(desire_rail, ext = 1.1)
+desire_rail_plot = rbind(
+  st_sf(data.frame(Geometry = "Desire line (original)"), geometry = desire_rail$geometry),
+  st_sf(data.frame(Geometry = "Leg 1 (origin to station)"), geometry = desire_rail$leg_orig),
+  st_sf(data.frame(Geometry = "Leg 2 (station to station)"), geometry = desire_rail$leg_via),
+  st_sf(data.frame(Geometry = "Leg 3 (station to destination)"), geometry = desire_rail$leg_dest)
+) 
+desire_rail_plot = desire_rail_plot |> 
+  mutate(lty = case_when(Geometry == "Desire line (original)" ~ 2, TRUE ~ 1)) |> 
+  mutate(size = case_when(Geometry == "Desire line (original)" ~ 1, TRUE ~ 2))
+bristol_rail_points = rbind(
+  st_sf(data.frame(
+    Node = "Origin and destination locations",
+    col = "black"
+    ), geometry = zone_cents_rail$geometry),
+  st_sf(data.frame(
+    Node = "Public transport node",
+    col = "red"
+    ), geometry = bristol_stations$geometry)
+)
+tm_shape(zones_od) +
+  tm_fill(fill_alpha = 0.2, lwd = 0.1) +
+  tm_shape(desire_rail_plot, bbox = bb, is.main = TRUE) +
+  tm_lines(col = "Geometry",
+           col.scale = tm_scale(values = "Set2"),
+           col.legend = tm_legend(position = tm_pos_in("left", "top")),
+           lwd = 2,
+           lty = "lty",
+           lty.scale = tm_scale_categorical(),
+           lty.legend = tm_legend_hide()) +
+  tm_shape(bristol_rail_points) +
+  tm_symbols(fill = "col", size = 0.75) +
+  tm_scalebar()
+
+
+```
+
+13.6. Routes
+
+Routes are just desire lines that are no longer straight, and their geometries are typically determined by the transport network in the region.
+
+They are usually generated from matrices that contain co-ordinate pairs making up desire lines.
+
+This routing process is done by *routing engines*: software and web services that return geometries and attributes describing how to get from origins to destinations.
+
+Note: a-lot of uncovered information here on specific routing engines.
+
+13.6.6. Routing example
+
+To show an example of routing we will focus on a subset of desire lines that are highly relevant to the policies we are trying to implement. To do this we will filter the desire lines into the ones that have many (100+) trips of between 2.5 and 5km, a good distance to cycle instead of drive.
+
+```{r}
+desire_lines$distance_km = as.numeric(st_length(desire_lines)) / 1000
+desire_lines_short = desire_lines |> 
+  filter(car_driver >= 100, distance_km <= 5, distance_km >= 2.5)
+
+```
+
+```{r}
+routes_short = route(l = desire_lines_short, route_fun = route_osrm,osrm.profile = "car")
+```
+
+These are then converted into routes using OSMR and stplanr functions.
+
+```{r}
+routes_plot_data = rbind(
+  desire_lines_short |> transmute(Entity = "Desire lines") |> sf::st_set_crs("EPSG:4326"),
+  routes_short |> transmute(Entity = "Routes") |> sf::st_set_crs("EPSG:4326")
+)
+zone_cents_routes = zone_cents[desire_lines_short, ]
+tm_shape(zones_od) +
+  tm_fill(fill_alpha = 0.2, lwd = 0.1) +
+  tm_shape(desire_lines_short, is.main = TRUE) + 
+  tm_lines(lty = 2) +
+  tm_shape(routes_short) +
+  tm_lines(col = "red") +
+  tm_add_legend(title = "Entity", labels = c("Desire lines", "Routes"),
+                type = "lines", col = c("black", "red"), lty = c(2, 1),
+                position = tm_pos_in("left", "top")) +
+  tm_shape(zone_cents_routes) +
+  tm_symbols(fill = "black", size = 0.5) +
+  tm_scalebar()
+```
+
+This visualisation shows areas where lots of short car journeys are made and hence are areas for improvement.
+
+13.7. Route Networks
